@@ -1,0 +1,220 @@
+import { useEffect, useState } from "react"
+import { Button } from "@/components/ui/button"
+import { Card, CardContent } from "@/components/ui/card"
+
+function generarFixture(jugadores, cantidadPartidos) {
+  if ((cantidadPartidos * 4) % jugadores.length !== 0) {
+    throw new Error("Número de partidos inválido: no se puede repartir de forma justa.")
+  }
+
+  const partidosPorJugador = (cantidadPartidos * 4) / jugadores.length
+  const parejas = []
+  const partidosPosibles = []
+
+  for (let i = 0; i < jugadores.length; i++) {
+    for (let j = i + 1; j < jugadores.length; j++) {
+      parejas.push([jugadores[i], jugadores[j]])
+    }
+  }
+
+  for (let i = 0; i < parejas.length; i++) {
+    for (let j = i + 1; j < parejas.length; j++) {
+      const [a1, a2] = parejas[i]
+      const [b1, b2] = parejas[j]
+      const conjunto = new Set([a1, a2, b1, b2])
+      if (conjunto.size === 4) {
+        partidosPosibles.push([[a1, a2], [b1, b2]])
+      }
+    }
+  }
+
+  for (let i = partidosPosibles.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1))
+    ;[partidosPosibles[i], partidosPosibles[j]] = [partidosPosibles[j], partidosPosibles[i]]
+  }
+
+  const partidos = []
+  const contador = Object.fromEntries(jugadores.map(j => [j, 0]))
+  const compañerosUsados = new Set()
+
+  for (const partido of partidosPosibles) {
+    const jugadoresEnPartido = new Set([...partido[0], ...partido[1]])
+    if ([...jugadoresEnPartido].some(j => contador[j] >= partidosPorJugador)) continue
+    if (compañerosUsados.has(partido[0].sort().join("-")) || compañerosUsados.has(partido[1].sort().join("-"))) continue
+
+    partidos.push(partido)
+    compañerosUsados.add(partido[0].sort().join("-"))
+    compañerosUsados.add(partido[1].sort().join("-"))
+    for (const j of jugadoresEnPartido) contador[j]++
+
+    if (partidos.length === cantidadPartidos) break
+  }
+
+  if (partidos.length < cantidadPartidos) {
+    throw new Error("No se pudo generar el fixture con esas restricciones.")
+  }
+
+  return { partidos, contador }
+}
+
+export default function FixtureApp() {
+  const [jugadores, setJugadores] = useState([
+    "Luis", "Ana", "Carlos", "Marta", "Pedro", "Lucía"
+  ])
+  const [cantidad, setCantidad] = useState(6)
+  const [fixture, setFixture] = useState([])
+  const [resumen, setResumen] = useState({})
+  const [ganadores, setGanadores] = useState(() => {
+    const saved = localStorage.getItem("ganadores")
+    return saved ? JSON.parse(saved) : {}
+  })
+  const [victorias, setVictorias] = useState(() => {
+    const saved = localStorage.getItem("victorias")
+    return saved ? JSON.parse(saved) : {}
+  })
+  const [error, setError] = useState(null)
+
+  useEffect(() => {
+    localStorage.setItem("ganadores", JSON.stringify(ganadores))
+  }, [ganadores])
+
+  useEffect(() => {
+    localStorage.setItem("victorias", JSON.stringify(victorias))
+  }, [victorias])
+
+  useEffect(() => {
+    if ('serviceWorker' in navigator) {
+      window.addEventListener('load', () => {
+        navigator.serviceWorker.register('/sw.js')
+      })
+    }
+  }, [])
+
+  const handleJugadorChange = (index, value) => {
+    const nuevos = [...jugadores]
+    nuevos[index] = value
+    setJugadores(nuevos)
+  }
+
+  const generar = () => {
+    try {
+      const { partidos, contador } = generarFixture([...jugadores], cantidad)
+      setFixture(partidos)
+      setResumen(contador)
+      setGanadores({})
+      setVictorias({})
+      localStorage.removeItem("ganadores")
+      localStorage.removeItem("victorias")
+      setError(null)
+    } catch (err) {
+      setError(err.message)
+      setFixture([])
+      setResumen({})
+      setGanadores({})
+      setVictorias({})
+    }
+  }
+
+  const registrarGanador = (index, equipo) => {
+    if (ganadores[index]) return // no permitir sobreescritura
+    const nuevoGanadores = { ...ganadores, [index]: equipo }
+    setGanadores(nuevoGanadores)
+
+    const [a1, a2] = fixture[index][0]
+    const [b1, b2] = fixture[index][1]
+    const ganadoresEquipo = equipo === "A" ? [a1, a2] : [b1, b2]
+    const nuevasVictorias = { ...victorias }
+    for (const jugador of ganadoresEquipo) {
+      nuevasVictorias[jugador] = (nuevasVictorias[jugador] || 0) + 1
+    }
+    setVictorias(nuevasVictorias)
+  }
+
+  return (
+    <div className="p-4 space-y-4">
+      <h1 className="text-xl font-bold">Sorteo de Pádel</h1>
+
+      <div className="grid grid-cols-2 gap-2">
+        {jugadores.map((j, i) => (
+          <input
+            key={i}
+            value={j}
+            onChange={e => handleJugadorChange(i, e.target.value)}
+            className="border p-1 rounded text-sm"
+          />
+        ))}
+      </div>
+
+      <div className="flex items-center gap-2">
+        <label className="text-sm">Cantidad de partidos:</label>
+        <select
+          value={cantidad}
+          onChange={e => setCantidad(parseInt(e.target.value))}
+          className="border p-1 rounded"
+        >
+          {[3, 6, 9, 12, 15].map(n => (
+            <option key={n} value={n}>{n}</option>
+          ))}
+        </select>
+        <Button onClick={generar}>Generar</Button>
+      </div>
+
+      {error && <p className="text-red-500">{error}</p>}
+
+      <div className="grid gap-2">
+        {fixture.map(([[a1, a2], [b1, b2]], i) => (
+          <Card key={i}>
+            <CardContent className="p-2 text-sm space-y-1">
+              <div>
+                <strong>Partido {i + 1}:</strong> {a1} y {a2} vs {b1} y {b2}
+              </div>
+              <div className="flex gap-2">
+                <Button
+                  variant="outline"
+                  onClick={() => registrarGanador(i, "A")}
+                  disabled={ganadores[i]}
+                >
+                  Ganó {a1} y {a2}
+                </Button>
+                <Button
+                  variant="outline"
+                  onClick={() => registrarGanador(i, "B")}
+                  disabled={ganadores[i]}
+                >
+                  Ganó {b1} y {b2}
+                </Button>
+              </div>
+              {ganadores[i] && (
+                <div className="text-green-600 font-semibold">
+                  Ganador: {ganadores[i] === "A" ? `${a1} y ${a2}` : `${b1} y ${b2}`}
+                </div>
+              )}
+            </CardContent>
+          </Card>
+        ))}
+      </div>
+
+      {Object.keys(resumen).length > 0 && (
+        <div>
+          <h2 className="font-semibold mt-4">Resumen de partidos jugados:</h2>
+          <ul className="text-sm">
+            {Object.entries(resumen).map(([j, count]) => (
+              <li key={j}>{j}: {count} partidos</li>
+            ))}
+          </ul>
+        </div>
+      )}
+
+      {Object.keys(victorias).length > 0 && (
+        <div>
+          <h2 className="font-semibold mt-4">Victorias:</h2>
+          <ul className="text-sm">
+            {Object.entries(victorias).map(([j, count]) => (
+              <li key={j}>{j}: {count} victorias</li>
+            ))}
+          </ul>
+        </div>
+      )}
+    </div>
+  )
+}
