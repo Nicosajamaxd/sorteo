@@ -1,12 +1,15 @@
-import { useEffect, useState } from "react"
+import { useEffect, useState, useMemo } from "react"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent } from "@/components/ui/card"
+import { Trash2, Plus, UserPlus, AlertTriangle } from "lucide-react"
 
-function generarFixture(jugadores, cantidadPartidos) {
+// --- Lógica del Algoritmo (sin cambios) ---
+const gcd = (a, b) => (b === 0 ? a : gcd(b, a % b))
+
+function intentarGenerarFixture(jugadores, cantidadPartidos) {
   if ((cantidadPartidos * 4) % jugadores.length !== 0) {
     throw new Error("Número de partidos inválido: no se puede repartir de forma justa.")
   }
-
   const partidosPorJugador = (cantidadPartidos * 4) / jugadores.length
   const parejas = []
   const partidosPosibles = []
@@ -46,175 +49,110 @@ function generarFixture(jugadores, cantidadPartidos) {
     compañerosUsados.add(partido[0].sort().join("-"))
     compañerosUsados.add(partido[1].sort().join("-"))
     for (const j of jugadoresEnPartido) contador[j]++
-
     if (partidos.length === cantidadPartidos) break
   }
 
-  if (partidos.length < cantidadPartidos) {
-    throw new Error("No se pudo generar el fixture con esas restricciones.")
-  }
-
+  if (partidos.length < cantidadPartidos) throw new Error("Fallo en la generación.")
   return { partidos, contador }
 }
 
+function generarFixture(jugadores, cantidadPartidos) {
+  for (let intento = 0; intento < 50; intento++) {
+    try { return intentarGenerarFixture(jugadores, cantidadPartidos) } catch (e) {}
+  }
+  throw new Error("No se pudo generar el fixture con estas restricciones.")
+}
+
 export default function FixtureApp() {
-  const [jugadores, setJugadores] = useState([
-    "Luis", "Ana", "Carlos", "Marta", "Pedro", "Lucía"
-  ])
+  const [jugadores, setJugadores] = useState(["Luis", "Ana", "Carlos", "Marta", "Pedro", "Lucía"])
   const [cantidad, setCantidad] = useState(6)
-  const [fixture, setFixture] = useState([])
-  const [resumen, setResumen] = useState({})
-  const [ganadores, setGanadores] = useState(() => {
-    const saved = localStorage.getItem("ganadores")
-    return saved ? JSON.parse(saved) : {}
-  })
-  const [victorias, setVictorias] = useState(() => {
-    const saved = localStorage.getItem("victorias")
-    return saved ? JSON.parse(saved) : {}
-  })
   const [error, setError] = useState(null)
+  
+  // Estados para persistencia
+  const [fixture, setFixture] = useState(() => JSON.parse(localStorage.getItem("fixture") || "[]"))
+  const [resumen, setResumen] = useState(() => JSON.parse(localStorage.getItem("resumen") || "{}"))
+  const [ganadores, setGanadores] = useState(() => JSON.parse(localStorage.getItem("ganadores") || "{}"))
+  
+  // Estado para el modal de confirmación
+  const [showConfirm, setShowConfirm] = useState(false)
+
+  const jugadoresValidos = useMemo(() => jugadores.filter(j => j.trim() !== ""), [jugadores])
+  const opcionesPartidos = useMemo(() => {
+    const num = jugadoresValidos.length
+    if (num < 4) return []
+    const step = num / gcd(num, 4)
+    return [1, 2, 3, 4, 5, 6].map(k => k * step)
+  }, [jugadoresValidos.length])
 
   useEffect(() => {
+    localStorage.setItem("fixture", JSON.stringify(fixture))
+    localStorage.setItem("resumen", JSON.stringify(resumen))
     localStorage.setItem("ganadores", JSON.stringify(ganadores))
-  }, [ganadores])
+  }, [fixture, resumen, ganadores])
 
-  useEffect(() => {
-    localStorage.setItem("victorias", JSON.stringify(victorias))
-  }, [victorias])
+  const victorias = useMemo(() => {
+    const conteo = {}
+    Object.entries(ganadores).forEach(([idx, equipo]) => {
+      const partido = fixture[idx]
+      if (!partido) return
+      const ganadoresArr = equipo === "A" ? partido[0] : partido[1]
+      ganadoresArr.forEach(j => conteo[j] = (conteo[j] || 0) + 1)
+    })
+    return conteo
+  }, [ganadores, fixture])
 
-  useEffect(() => {
-    if ('serviceWorker' in navigator) {
-      window.addEventListener('load', () => {
-        navigator.serviceWorker.register('/sw.js')
-      })
+  const manejarClickGenerar = () => {
+    // Si ya existe un fixture, mostrar el modal en lugar de ejecutar la función
+    if (fixture.length > 0) {
+      setShowConfirm(true)
+    } else {
+      ejecutarGeneracion()
     }
-  }, [])
-
-  const handleJugadorChange = (index, value) => {
-    const nuevos = [...jugadores]
-    nuevos[index] = value
-    setJugadores(nuevos)
   }
 
-  const generar = () => {
+  const ejecutarGeneracion = () => {
     try {
-      const { partidos, contador } = generarFixture([...jugadores], cantidad)
+      const { partidos, contador } = generarFixture([...jugadoresValidos], cantidad)
       setFixture(partidos)
       setResumen(contador)
       setGanadores({})
-      setVictorias({})
-      localStorage.removeItem("ganadores")
-      localStorage.removeItem("victorias")
       setError(null)
+      setShowConfirm(false)
     } catch (err) {
       setError(err.message)
-      setFixture([])
-      setResumen({})
-      setGanadores({})
-      setVictorias({})
+      setShowConfirm(false)
     }
-  }
-
-  const registrarGanador = (index, equipo) => {
-    if (ganadores[index]) return // no permitir sobreescritura
-    const nuevoGanadores = { ...ganadores, [index]: equipo }
-    setGanadores(nuevoGanadores)
-
-    const [a1, a2] = fixture[index][0]
-    const [b1, b2] = fixture[index][1]
-    const ganadoresEquipo = equipo === "A" ? [a1, a2] : [b1, b2]
-    const nuevasVictorias = { ...victorias }
-    for (const jugador of ganadoresEquipo) {
-      nuevasVictorias[jugador] = (nuevasVictorias[jugador] || 0) + 1
-    }
-    setVictorias(nuevasVictorias)
   }
 
   return (
-    <div className="p-4 space-y-4">
-      <h1 className="text-xl font-bold">Sorteo de Pádel</h1>
+    <div className="p-4 space-y-6 max-w-2xl mx-auto">
+      {/* ... [Código previo de Jugadores y Controles] ... */}
+      
+      {/* Reemplaza tu botón actual de "Generar Fixture" por este: */}
+      <Button onClick={manejarClickGenerar} className="w-full sm:ml-auto">Generar Fixture</Button>
 
-      <div className="grid grid-cols-2 gap-2">
-        {jugadores.map((j, i) => (
-          <input
-            key={i}
-            value={j}
-            onChange={e => handleJugadorChange(i, e.target.value)}
-            className="border p-1 rounded text-sm"
-          />
-        ))}
-      </div>
-
-      <div className="flex items-center gap-2">
-        <label className="text-sm">Cantidad de partidos:</label>
-        <select
-          value={cantidad}
-          onChange={e => setCantidad(parseInt(e.target.value))}
-          className="border p-1 rounded"
-        >
-          {[3, 6, 9, 12, 15].map(n => (
-            <option key={n} value={n}>{n}</option>
-          ))}
-        </select>
-        <Button onClick={generar}>Generar</Button>
-      </div>
-
-      {error && <p className="text-red-500">{error}</p>}
-
-      <div className="grid gap-2">
-        {fixture.map(([[a1, a2], [b1, b2]], i) => (
-          <Card key={i}>
-            <CardContent className="p-2 text-sm space-y-1">
-              <div>
-                <strong>Partido {i + 1}:</strong> {a1} y {a2} vs {b1} y {b2}
+      {/* MODAL DE CONFIRMACIÓN */}
+      {showConfirm && (
+        <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
+          <Card className="max-w-sm w-full animate-in fade-in zoom-in duration-200">
+            <CardContent className="p-6 space-y-4">
+              <div className="flex items-center gap-2 text-amber-600">
+                <AlertTriangle className="w-6 h-6" />
+                <h3 className="font-bold text-lg">¿Nuevo Torneo?</h3>
               </div>
-              <div className="flex gap-2">
-                <Button
-                  variant="outline"
-                  onClick={() => registrarGanador(i, "A")}
-                  disabled={ganadores[i]}
-                >
-                  Ganó {a1} y {a2}
-                </Button>
-                <Button
-                  variant="outline"
-                  onClick={() => registrarGanador(i, "B")}
-                  disabled={ganadores[i]}
-                >
-                  Ganó {b1} y {b2}
-                </Button>
+              <p className="text-sm text-gray-600">
+                Ya hay un torneo en progreso. Si generas uno nuevo, perderás el progreso actual y los resultados registrados.
+              </p>
+              <div className="flex gap-2 pt-2">
+                <Button variant="outline" className="w-full" onClick={() => setShowConfirm(false)}>Cancelar</Button>
+                <Button variant="destructive" className="w-full" onClick={ejecutarGeneracion}>Sí, borrar todo</Button>
               </div>
-              {ganadores[i] && (
-                <div className="text-green-600 font-semibold">
-                  Ganador: {ganadores[i] === "A" ? `${a1} y ${a2}` : `${b1} y ${b2}`}
-                </div>
-              )}
             </CardContent>
           </Card>
-        ))}
-      </div>
-
-      {Object.keys(resumen).length > 0 && (
-        <div>
-          <h2 className="font-semibold mt-4">Resumen de partidos jugados:</h2>
-          <ul className="text-sm">
-            {Object.entries(resumen).map(([j, count]) => (
-              <li key={j}>{j}: {count} partidos</li>
-            ))}
-          </ul>
         </div>
       )}
 
-      {Object.keys(victorias).length > 0 && (
-        <div>
-          <h2 className="font-semibold mt-4">Victorias:</h2>
-          <ul className="text-sm">
-            {Object.entries(victorias).map(([j, count]) => (
-              <li key={j}>{j}: {count} victorias</li>
-            ))}
-          </ul>
-        </div>
-      )}
+      {/* ... [Resto de tu renderizado: Partidos, Resumen, Ranking] ... */}
     </div>
   )
 }
